@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 - Function `Random::replace_candidate()` is slightly faster
+- The cache now accepts additional template arguments to change the underlying map for retrieving cache items.
 
 ### Removed
 - Removed Catch2 submodule
