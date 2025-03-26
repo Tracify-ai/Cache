@@ -41,17 +41,16 @@ struct NullLock
 };
 
 template<
-	typename Key,                                            // Key type
-	typename Value,                                          // Value type
-	template<typename> class CachePolicy = Policy::Random,   // Cache policy
-	typename Lock = NullLock,                                // Lock type (for multithreading)
-	template<typename...> class StatsProvider = Stats::Basic // Statistics measurement object
+	typename Key,                                                // Key type
+	typename Value,                                              // Value type
+	template<typename> class CachePolicy = Policy::Random,       // Cache policy
+	typename Lock = NullLock,                                    // Lock type (for multithreading)
+	template<typename...> class StatsProvider = Stats::Basic,    // Statistics measurement object
+	typename underlying_storage = std::unordered_map<Key, Value> // Underlying map used for cache lookup
 >
 class Cache
 {
 private:
-	using underlying_storage = std::unordered_map<Key, Value>;
-
 	const size_t m_MaxSize;
 	underlying_storage m_Cache;
 	mutable CachePolicy<Key> m_CachePolicy;
