@@ -44,26 +44,29 @@ struct NullLock
 // Helper trait to determine the default storage type
 template<typename Key, typename Value>
 struct DefaultStorage {
-    using type = std::unordered_map<Key, Value>;
+    template<typename K, typename V>
+    using type = std::unordered_map<K, V>;
 };
 
 // Specialization for void value type
 template<typename Key>
 struct DefaultStorage<Key, void> {
-    using type = std::unordered_set<Key>;
+    template<typename K>
+    using type = std::unordered_set<K>;
 };
 
 template<
-	typename Key,                                                           // Key type
-	typename Value = void,                                                  // Value type
-	template<typename> class CachePolicy = Policy::Random,                  // Cache policy
-	typename Lock = NullLock,                                               // Lock type (for multithreading)
-	template<typename...> class StatsProvider = Stats::Basic,               // Statistics measurement object
-	typename underlying_storage = typename DefaultStorage<Key, Value>::type // Underlying map used for cache lookup
+	typename Key,                                                                   // Key type
+	typename Value = void,                                                          // Value type
+	template<typename> class CachePolicy = Policy::Random,                          // Cache policy
+	typename Lock = NullLock,                                                       // Lock type (for multithreading)
+	template<typename...> class StatsProvider = Stats::Basic,                       // Statistics measurement object
+	template<typename...> class Storage = DefaultStorage<Key, Value>::template type // Underlying map used for cache lookup
 >
 class Cache
 {
 private:
+	using underlying_storage = Storage<Key, Value>;
 	const size_t m_MaxSize;
 	underlying_storage m_Cache;
 	mutable CachePolicy<Key> m_CachePolicy;
@@ -292,11 +295,12 @@ template<
 	template<typename> class CachePolicy,         // Cache policy
 	typename Lock,                                // Lock type (for multithreading)
 	template<typename...> class StatsProvider,    // Statistics measurement object
-	typename underlying_storage                   // Underlying map used for cache lookup
+	template<typename...> class Storage           // Underlying set used for cache lookup
 >
-class Cache<Key, void, CachePolicy, Lock, StatsProvider, underlying_storage>
+class Cache<Key, void, CachePolicy, Lock, StatsProvider, Storage>
 {
 private:
+	using underlying_storage = Storage<Key>;
 	const size_t m_MaxSize;
 	underlying_storage m_Cache;
 	mutable CachePolicy<Key> m_CachePolicy;
@@ -512,10 +516,10 @@ namespace std
 		template<typename> class Policy,
 		typename Lock,
 		template<typename...> class Stats,
-		typename underlying_storage,
+		template<typename...> class Storage,
 		typename Pred
 	>
-	typename Cache<Key, Value, Policy, Lock, Stats, underlying_storage>::size_type erase_if(Cache<Key, Value, Policy, Lock, Stats, underlying_storage>& c, Pred pred)
+	typename Cache<Key, Value, Policy, Lock, Stats, Storage>::size_type erase_if(Cache<Key, Value, Policy, Lock, Stats, Storage>& c, Pred pred)
 	{
 		auto old_size = c.size();
 		for(auto i = c.begin(), last = c.end(); i != last;)
