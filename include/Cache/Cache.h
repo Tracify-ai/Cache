@@ -28,6 +28,7 @@
 #include <limits>
 #include <mutex>
 #include <unordered_map>
+#include<unordered_set>
 
 #include "Policy/Random.h"
 #include "Stats/Basic.h"
@@ -40,17 +41,32 @@ struct NullLock
 	void unlock() const noexcept {}
 };
 
+// Helper trait to determine the default storage type
+template<typename Key, typename Value>
+struct DefaultStorage {
+    template<typename K, typename V>
+    using type = std::unordered_map<K, V>;
+};
+
+// Specialization for void value type
+template<typename Key>
+struct DefaultStorage<Key, void> {
+    template<typename K>
+    using type = std::unordered_set<K>;
+};
+
 template<
-	typename Key,                                                // Key type
-	typename Value,                                              // Value type
-	template<typename> class CachePolicy = Policy::Random,       // Cache policy
-	typename Lock = NullLock,                                    // Lock type (for multithreading)
-	template<typename...> class StatsProvider = Stats::Basic,    // Statistics measurement object
-	typename underlying_storage = std::unordered_map<Key, Value> // Underlying map used for cache lookup
+	typename Key,                                                                   // Key type
+	typename Value = void,                                                          // Value type
+	template<typename> class CachePolicy = Policy::Random,                          // Cache policy
+	typename Lock = NullLock,                                                       // Lock type (for multithreading)
+	template<typename...> class StatsProvider = Stats::Basic,                       // Statistics measurement object
+	template<typename...> class Storage = DefaultStorage<Key, Value>::template type // Underlying map used for cache lookup
 >
 class Cache
 {
 private:
+	using underlying_storage = Storage<Key, Value>;
 	const size_t m_MaxSize;
 	underlying_storage m_Cache;
 	mutable CachePolicy<Key> m_CachePolicy;
@@ -269,6 +285,229 @@ private:
 	}
 };
 
+// Specialization for void value type (cache key-only sets)
+// Differ than the primary template in the following:
+// - No mapped_type, operator[], lookup, or at() methods
+// - insert()/erase() are adjusted to work with key only
+// - StatsProvider is instantiated with void as the Value type
+template<
+	typename Key,                                 // Key type
+	template<typename> class CachePolicy,         // Cache policy
+	typename Lock,                                // Lock type (for multithreading)
+	template<typename...> class StatsProvider,    // Statistics measurement object
+	template<typename...> class Storage           // Underlying set used for cache lookup
+>
+class Cache<Key, void, CachePolicy, Lock, StatsProvider, Storage>
+{
+private:
+	using underlying_storage = Storage<Key>;
+	const size_t m_MaxSize;
+	underlying_storage m_Cache;
+	mutable CachePolicy<Key> m_CachePolicy;
+	mutable StatsProvider<Key, void> m_Stats;
+	mutable Lock m_Lock;
+
+public:
+	using key_type        = typename underlying_storage::key_type;
+	using value_type      = typename underlying_storage::value_type;
+	using reference       = typename underlying_storage::reference;
+	using const_reference = typename underlying_storage::const_reference;
+	using pointer         = typename underlying_storage::pointer;
+	using const_pointer   = typename underlying_storage::const_pointer;
+	using iterator        = typename underlying_storage::iterator;
+	using const_iterator  = typename underlying_storage::const_iterator;
+	using size_type       = typename underlying_storage::size_type;
+	using difference_type = typename underlying_storage::difference_type;
+
+	Cache(
+		const size_t max_size,
+		const CachePolicy<Key>& policy = CachePolicy<Key>(),
+		const StatsProvider<Key, void>& stats = StatsProvider<Key, void>())
+		: m_MaxSize(max_size == 0 ? std::numeric_limits<size_t>::max() : max_size), m_CachePolicy(policy), m_Stats(stats), m_Lock()
+	{
+		std::lock_guard<Lock> lock(m_Lock);
+		static constexpr size_t MAX_RESERVE_SIZE = 1024;
+		m_Cache.reserve(m_MaxSize < MAX_RESERVE_SIZE ? m_MaxSize : MAX_RESERVE_SIZE);
+	}
+
+	Cache(
+		const size_t max_size,
+		const Lock& lock,
+		const CachePolicy<Key>& policy = CachePolicy<Key>(),
+		const StatsProvider<Key, void>& stats = StatsProvider<Key, void>())
+		: m_MaxSize(max_size == 0 ? std::numeric_limits<size_t>::max() : max_size), m_CachePolicy(policy), m_Stats(stats), m_Lock(lock)
+	{
+		std::lock_guard<Lock> mlock(m_Lock);
+		static constexpr size_t MAX_RESERVE_SIZE = 1024;
+		m_Cache.reserve(m_MaxSize < MAX_RESERVE_SIZE ? m_MaxSize : MAX_RESERVE_SIZE);
+	}
+
+	Cache(const Cache& other)
+		: m_MaxSize(other.m_MaxSize)
+	{
+		std::lock(m_Lock, other.m_Lock);
+		std::lock_guard<Lock> lhs_lk(m_Lock, std::adopt_lock);
+		std::lock_guard<Lock> rhs_lk(other.m_Lock, std::adopt_lock);
+
+		m_Cache = other.m_Cache;
+		m_Stats = other.m_Stats;
+		m_CachePolicy = other.m_CachePolicy;
+	}
+
+	~Cache() = default;
+
+	      iterator  begin()       noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.begin(); }
+	const_iterator  begin() const noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.begin(); }
+	const_iterator cbegin() const noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.cbegin(); }
+
+	      iterator  end()       noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.end(); }
+	const_iterator  end() const noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.end(); }
+	const_iterator cend() const noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.cend(); }
+
+	bool empty() const noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.empty(); }
+
+	size_type size() const noexcept { std::lock_guard<Lock> lock(m_Lock); return m_Cache.size(); }
+	constexpr size_type max_size() const noexcept { return m_MaxSize; }
+
+	iterator erase(const_iterator pos) { std::lock_guard<Lock> lock(m_Lock); m_CachePolicy.erase(*pos); m_Stats.erase(*pos); return m_Cache.erase(pos); }
+
+	iterator erase(const_iterator first, const_iterator last)
+	{
+		std::lock_guard<Lock> lock(m_Lock);
+		for(auto it = first; it != last; ++it)
+		{
+			m_CachePolicy.erase(*it);
+			m_Stats.erase(*it);
+		}
+
+		return m_Cache.erase(first, last);
+	}
+
+	size_type erase(const key_type& key)
+	{
+		std::lock_guard<Lock> lock(m_Lock);
+		auto it = find_key(key);
+
+		if(it == m_Cache.end()) return 0;
+
+		m_CachePolicy.erase(key);
+		m_Stats.erase(key);
+		m_Cache.erase(it);
+
+		return 1;
+	}
+
+	template<typename... Args>
+	std::pair<iterator, bool> emplace(Args&&... args)
+	{
+		std::lock_guard<Lock> lock(m_Lock);
+		auto pair = m_Cache.emplace(args...);
+
+		if(pair.second == true)
+		{
+			if(m_Cache.size() > m_MaxSize)
+			{
+				auto replaced_key = m_CachePolicy.replace_candidate();
+				auto it = m_Cache.find(replaced_key);
+
+				m_CachePolicy.erase(replaced_key);
+				m_Stats.evict(*it);
+				m_Cache.erase(it);
+			}
+
+			m_CachePolicy.insert(*(pair.first));
+		}
+		else
+			m_CachePolicy.touch(*(pair.first));
+
+		return pair;
+	}
+
+	template<typename InputIt>
+	void insert(InputIt first, InputIt last)
+	{
+		for(; first != last; ++first)
+			insert(*first);
+	}
+
+	void insert(std::initializer_list<value_type> ilist) { insert(ilist.begin(), ilist.end()); }
+
+	std::pair<iterator, bool> insert(const key_type& key) noexcept
+	{
+		std::lock_guard<Lock> lock(m_Lock);
+		auto it = m_Cache.find(key);
+
+		if(it == m_Cache.end())
+		{
+			if(m_Cache.size() + 1 > m_MaxSize)
+			{
+				auto replaced_key = m_CachePolicy.replace_candidate();
+				it = m_Cache.find(replaced_key);
+
+				m_CachePolicy.erase(replaced_key);
+				m_Stats.evict(*it);
+				m_Cache.erase(it);
+			}
+
+			m_CachePolicy.insert(key);
+			return m_Cache.insert(key);
+		}
+		else
+		{
+			m_CachePolicy.touch(key);
+			return { it, false };
+		}
+	}
+
+	void clear() noexcept
+	{
+		std::lock_guard<Lock> lock(m_Lock);
+
+		m_CachePolicy.clear();
+		m_Cache.clear();
+		m_Stats.clear();
+	}
+
+	void flush() noexcept { clear(); }
+	void flush(const key_type& key) noexcept { erase(key); }
+
+	bool   contains(const key_type& key) const { std::lock_guard<Lock> lock(m_Lock); return find_key(key) != m_Cache.end(); }
+	size_type count(const key_type& key) const { std::lock_guard<Lock> lock(m_Lock); return find_key(key) != m_Cache.end(); }
+
+	      iterator find(const key_type& key)       { std::lock_guard<Lock> lock(m_Lock); return find_key(key); }
+	const_iterator find(const key_type& key) const { std::lock_guard<Lock> lock(m_Lock); return find_key(key); }
+
+	size_type hit_count() const noexcept { return m_Stats.hit_count(); }
+	size_type miss_count() const noexcept { return m_Stats.miss_count(); }
+	size_type access_count() const noexcept { return m_Stats.hit_count() + m_Stats.miss_count(); }
+	size_type entry_invalidation_count() const noexcept { return m_Stats.entry_invalidation_count(); }
+	size_type cache_invalidation_count() const noexcept { return m_Stats.cache_invalidation_count(); }
+	size_type evicted_count() const noexcept { return m_Stats.evicted_count(); }
+
+	float hit_ratio  () const noexcept { return static_cast<float>(hit_count ())   / (static_cast<float>(hit_count() + miss_count())); }
+	float miss_ratio () const noexcept { return static_cast<float>(miss_count())   / (static_cast<float>(hit_count() + miss_count())); }
+	float utilization() const noexcept { return static_cast<float>(m_Cache.size()) /  static_cast<float>(m_MaxSize); }
+
+private:
+	iterator find_key(const key_type& key)
+	{
+		auto it = m_Cache.find(key);
+
+		return (it != m_Cache.end() ?
+			(m_Stats.hit(*it), m_CachePolicy.touch(key), it) :
+			(m_Stats.miss(key), it));
+	}
+
+	const_iterator find_key(const key_type& key) const
+	{
+		auto it = m_Cache.find(key);
+
+		return (it != m_Cache.end() ?
+			(m_Stats.hit(*it), m_CachePolicy.touch(key), it) :
+			(m_Stats.miss(key), it));
+	}
+};
+
 namespace std
 {
 	template<
@@ -277,9 +516,10 @@ namespace std
 		template<typename> class Policy,
 		typename Lock,
 		template<typename...> class Stats,
+		template<typename...> class Storage,
 		typename Pred
 	>
-	typename Cache<Key, Value, Policy, Lock, Stats>::size_type erase_if(Cache<Key, Value, Policy, Lock, Stats>& c, Pred pred)
+	typename Cache<Key, Value, Policy, Lock, Stats, Storage>::size_type erase_if(Cache<Key, Value, Policy, Lock, Stats, Storage>& c, Pred pred)
 	{
 		auto old_size = c.size();
 		for(auto i = c.begin(), last = c.end(); i != last;)

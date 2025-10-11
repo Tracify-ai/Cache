@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.1)
 # compiler config
 #---------------------------------------------------------------------------------------
 add_catch_test(API.test  CacheAPI.cpp  LIBRARIES Cache CXX_STANDARD 14 TIMEOUT 10)
+add_catch_test(APIKeyOnly.test  CacheAPIKeyOnly.cpp  LIBRARIES Cache CXX_STANDARD 14 TIMEOUT 10)
 add_catch_test(FIFO.test FIFOCache.cpp LIBRARIES Cache CXX_STANDARD 14 TIMEOUT 10)
 add_catch_test(LFU.test  LFUCache.cpp  LIBRARIES Cache CXX_STANDARD 14 TIMEOUT 10)
 add_catch_test(LIFO.test LIFOCache.cpp LIBRARIES Cache CXX_STANDARD 14 TIMEOUT 10)
@@ -15,6 +16,7 @@ add_catch_test(Wrap.test Wrapper.cpp   LIBRARIES Cache CXX_STANDARD 14 TIMEOUT 1
 # Turn on compiler warnings
 #---------------------------------------------------------------------------------------
 target_enable_warnings(API.test)
+target_enable_warnings(APIKeyOnly.test)
 target_enable_warnings(FIFO.test)
 target_enable_warnings(LFU.test)
 target_enable_warnings(LIFO.test)
@@ -26,6 +28,7 @@ target_enable_warnings(Wrap.test)
 # Enable (or disable) features based on the given options
 #---------------------------------------------------------------------------------------
 target_code_coverage(API.test)
+target_code_coverage(APIKeyOnly.test)
 target_code_coverage(FIFO.test)
 target_code_coverage(LFU.test)
 target_code_coverage(LIFO.test)
